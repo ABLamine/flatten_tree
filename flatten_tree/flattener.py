@@ -4,10 +4,8 @@ from .datamodel import TreeNode, Condition, OrCondition
 def add_simple_constraint(constraints: Dict[str, tuple], var: str, op: str, val: str) -> Optional[Dict[str, tuple]]:
     """
     Returns a new copy of constraints with the new simple condition added.
-    
     constraints: dict mapping variable -> (equality: Optional[str], inequalities: Set[str])
     op: "=" or "!=".
-    
     If the new condition causes a contradiction, returns None.
     """
     # Create a deep copy of constraints for the current path.
@@ -50,7 +48,7 @@ class TreeFlattener:
         
            condition1 & condition2 & ... : leaf_value
         
-        A missing condition (empty strategy) will yield simply ": leaf_value".
+        An empty strategy will yield simply ": leaf_value".
         """
         yield from self._dfs_collect_strategies(root_id, constraints={}, extra_conditions=[])
 
@@ -79,24 +77,29 @@ class TreeFlattener:
         if node.or_condition is not None:
             or_cond = node.or_condition
 
-            # Branch YES: the OR condition is considered true.
-            # We add the OR as an extra condition (since it does not map to a single variable constraint).
-            yes_extra = extra_conditions.copy()
-            yes_extra.append(f"{or_cond.left.variable}{or_cond.left.operator}{or_cond.left.value} OR {or_cond.right.variable}{or_cond.right.operator}{or_cond.right.value}")
+            # Branch YES: split into two DFS paths, one for each alternative.
             if node.yes_branch is not None:
-                yield from self._dfs_collect_strategies(node.yes_branch, constraints.copy(), yes_extra)
+                # Option 1: assume left condition is true.
+                constraints_left = add_simple_constraint(constraints.copy(), or_cond.left.variable, or_cond.left.operator, or_cond.left.value)
+                if constraints_left is not None:
+                    yield from self._dfs_collect_strategies(node.yes_branch, constraints_left, extra_conditions.copy())
+                # Option 2: assume right condition is true.
+                constraints_right = add_simple_constraint(constraints.copy(), or_cond.right.variable, or_cond.right.operator, or_cond.right.value)
+                if constraints_right is not None:
+                    yield from self._dfs_collect_strategies(node.yes_branch, constraints_right, extra_conditions.copy())
 
-            # Branch NO: the OR condition is false, meaning both parts must be false.
-            new_constraints = constraints.copy()
-            left_neg_op = "!=" if or_cond.left.operator == "=" else "="
-            new_constraints = add_simple_constraint(new_constraints, or_cond.left.variable, left_neg_op, or_cond.left.value)
-            if new_constraints is None:
-                return  # Branch is impossible.
-            right_neg_op = "!=" if or_cond.right.operator == "=" else "="
-            new_constraints = add_simple_constraint(new_constraints, or_cond.right.variable, right_neg_op, or_cond.right.value)
-            if new_constraints is None:
-                return
+            # Branch NO: the OR condition is false, meaning both parts are false.
             if node.no_branch is not None:
+                new_constraints = constraints.copy()
+                # For left: if originally "=" then now "!=" and vice versa.
+                left_neg_op = "!=" if or_cond.left.operator == "=" else "="
+                new_constraints = add_simple_constraint(new_constraints, or_cond.left.variable, left_neg_op, or_cond.left.value)
+                if new_constraints is None:
+                    return  # Branch impossible.
+                right_neg_op = "!=" if or_cond.right.operator == "=" else "="
+                new_constraints = add_simple_constraint(new_constraints, or_cond.right.variable, right_neg_op, or_cond.right.value)
+                if new_constraints is None:
+                    return  # Branch impossible.
                 yield from self._dfs_collect_strategies(node.no_branch, new_constraints, extra_conditions.copy())
 
         elif node.single_condition is not None:
